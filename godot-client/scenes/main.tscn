@@ -1,62 +1,58 @@
-[gd_scene load_steps=3 format=3]
+[gd_scene load_steps=5 format=3]
 
-[ext_resource type="Script" path="res://scripts/forge_ui.gd" id="1"]
-[ext_resource type="Script" path="res://scripts/weapon_spawner.gd" id="2"]
+[ext_resource type="Script" path="res://scripts/main.gd" id="1"]
+[ext_resource type="Script" path="res://scripts/behaviors/holdable_slot.gd" id="2"]
+
+[sub_resource type="PlaneMesh" id="PlaneMesh_1"]
+size = Vector2(20, 20)
+
+[sub_resource type="StandardMaterial3D" id="Mat_Ground"]
+albedo_color = Color(0.25, 0.28, 0.22, 1)
 
 [node name="Main" type="Node3D"]
+script = ExtResource("1")
 
 [node name="Camera3D" type="Camera3D" parent="."]
-transform = Transform3D(1, 0, 0, 0, 0.94, 0.342, 0, -0.342, 0.94, 0, 1.8, 3.5)
+transform = Transform3D(1, 0, 0, 0, 0.866, 0.5, 0, -0.5, 0.866, 0, 4, 6)
 
 [node name="DirectionalLight3D" type="DirectionalLight3D" parent="."]
-transform = Transform3D(1, 0, 0, 0, 0.707, 0.707, 0, -0.707, 0.707, 0, 4, 0)
+transform = Transform3D(1, 0, 0, 0, 0.707, 0.707, 0, -0.707, 0.707, 0, 8, 0)
+shadow_enabled = true
 
-[node name="WeaponSpawner" type="Node3D" parent="." groups=["weapon_spawner"]]
+[node name="Ground" type="MeshInstance3D" parent="."]
+mesh = SubResource("PlaneMesh_1")
+material_override = SubResource("Mat_Ground")
+
+[node name="EntityRoot" type="Node3D" parent="."]
+unique_name_in_owner = true
+
+[node name="Character" type="Node3D" parent="EntityRoot"]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0.75, 0)
+
+[node name="Body" type="MeshInstance3D" parent="EntityRoot/Character"]
+mesh = CapsuleMesh.new()
+
+[node name="HoldableSlot" type="Marker3D" parent="EntityRoot/Character"]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0.5, 0.3, 0)
 script = ExtResource("2")
 
 [node name="UI" type="CanvasLayer" parent="."]
 
-[node name="ForgeUI" type="Control" parent="UI"]
-layout_mode = 3
-anchors_preset = 15
+[node name="TopBar" type="HBoxContainer" parent="UI"]
+anchors_preset = 10
 anchor_right = 1.0
-anchor_bottom = 1.0
-script = ExtResource("1")
+offset_bottom = 40.0
+offset_left = 10.0
+offset_right = -10.0
+offset_top = 10.0
 
-[node name="Panel" type="PanelContainer" parent="UI/ForgeUI"]
-layout_mode = 1
-anchors_preset = 2
-anchor_top = 1.0
-anchor_bottom = 1.0
-offset_left = 16.0
-offset_top = -340.0
-offset_right = 320.0
-offset_bottom = -16.0
-
-[node name="VBox" type="VBoxContainer" parent="UI/ForgeUI/Panel"]
-layout_mode = 2
-
-[node name="Title" type="Label" parent="UI/ForgeUI/Panel/VBox"]
-layout_mode = 2
-text = "WEAPON FORGE"
-
-[node name="StyleOption" type="OptionButton" parent="UI/ForgeUI/Panel/VBox"]
+[node name="InputField" type="LineEdit" parent="UI/TopBar"]
 unique_name_in_owner = true
 layout_mode = 2
+size_flags_horizontal = 3
+placeholder_text = "Type a command... (e.g. Add a tree)"
 
-[node name="ForgeButton" type="Button" parent="UI/ForgeUI/Panel/VBox"]
+[node name="StatusLabel" type="Label" parent="UI/TopBar"]
 unique_name_in_owner = true
 layout_mode = 2
-text = "FORGE WEAPON"
-
-[node name="StatusLabel" type="Label" parent="UI/ForgeUI/Panel/VBox"]
-unique_name_in_owner = true
-layout_mode = 2
-text = "Waiting for server..."
-
-[node name="Preview" type="TextureRect" parent="UI/ForgeUI/Panel/VBox"]
-unique_name_in_owner = true
-layout_mode = 2
-custom_minimum_size = Vector2(200, 200)
-expand_mode = 1
-stretch_mode = 5
+text = "Waiting for MCP..."

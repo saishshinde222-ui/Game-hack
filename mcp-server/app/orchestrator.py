@@ -2,98 +2,174 @@ import asyncio
 import logging
 from pathlib import Path
 
-from fastapi import WebSocket
-
-from app.clients.seedance import SeedanceClient
-from app.clients.seedream import SeedreamClient
 from app.clients.tripo import TripoClient
+from app.clients.seedream import SeedreamClient
 from app.reasoning import analyze_seed_state
-from app.state import forge_store
-from app.utils.sprites import convert_video_to_spritesheet
 
 logger = logging.getLogger(__name__)
-ASSETS_DIR = Path(__file__).parent.parent / "assets"
 
 
-async def _push(ws: WebSocket, seed_id: str, status: str, message: str, **extra):
-    payload = {"seed_id": seed_id, "status": status, "message": message, **extra}
-    forge_store[seed_id] = payload
+async def handle_user_prompt(prompt: str, context: dict, assets_dir: Path) -> list[dict]:
+    """
+    Takes a user prompt + project context from Godot.
+    Returns a list of JSON commands to send back to Godot.
+    """
+    prompt_lower = prompt.lower().strip()
+
+    if _is_forge_request(prompt_lower):
+        return await _forge_weapon(prompt, assets_dir)
+
+    if _is_spawn_request(prompt_lower):
+        return _spawn_placeholder(prompt)
+
+    if _is_remove_request(prompt_lower):
+        return _remove_entity(prompt)
+
+    if _is_behavior_request(prompt_lower):
+        return _attach_behavior(prompt)
+
+    return [{"type": "status", "message": "Command not recognized: %s" % prompt}]
+
+
+def _is_forge_request(p: str) -> bool:
+    return any(w in p for w in ["forge", "generate weapon", "create sword", "make blade", "make weapon"])
+
+
+def _is_spawn_request(p: str) -> bool:
+    return any(w in p for w in ["add", "spawn", "create", "place"])
+
+
+def _is_remove_request(p: str) -> bool:
+    return any(w in p for w in ["remove", "delete", "destroy"])
+
+
+def _is_behavior_request(p: str) -> bool:
+    return any(w in p for w in ["wander", "move to", "chop", "equip"])
+
+
+async def _forge_weapon(prompt: str, assets_dir: Path) -> list[dict]:
+    """Full AI forge pipeline: reasoning → Tripo 3D → spawn command."""
+    growth_log = _extract_growth_log(prompt)
+    prompts = analyze_seed_state(growth_log)
+
+    commands = []
+    commands.append({"type": "status", "message": "Generating 3D mesh with Tripo..."})
+
+    import uuid
+    seed_id = str(uuid.uuid4())[:8]
+
     try:
-        await ws.send_json(payload)
-    except Exception:
-        logger.warning("WebSocket send failed for %s", seed_id)
-
-
-async def forge_pipeline(ws: WebSocket, seed_id: str, growth_log: dict):
-    try:
-        # --- Step 1: Reasoning (local, instant) ---
-        await _push(ws, seed_id, "Reasoning", "Analyzing growth log...")
-        prompts = analyze_seed_state(growth_log)
-        await asyncio.sleep(0.3)
-
-        # --- Step 2: 3D mesh via Tripo ---
-        await _push(ws, seed_id, "MeshGen", "Generating 3D weapon with Tripo...")
         tripo = TripoClient()
-        glb_path, thumbnail_path = await tripo.generate(
+        glb_path, thumb_path = await tripo.generate(
             prompt=prompts["tripo_prompt"],
-            output_dir=ASSETS_DIR,
+            output_dir=assets_dir,
             seed_id=seed_id,
         )
 
-        # --- Step 3: 2D generation (icon + emotion in parallel) ---
-        await _push(ws, seed_id, "EmotionGen", "Creating soul sprite & icon...")
-
-        tasks = []
-
-        seedream = SeedreamClient()
-        tasks.append(
-            seedream.generate(
+        icon_path = None
+        try:
+            seedream = SeedreamClient()
+            icon_path = await seedream.generate(
                 prompt=prompts["icon_prompt"],
-                output_dir=ASSETS_DIR,
+                output_dir=assets_dir,
                 seed_id=seed_id,
             )
-        )
+        except Exception as e:
+            logger.warning("Seedream icon failed: %s", e)
 
-        if thumbnail_path and prompts.get("needs_2d"):
-            seedance = SeedanceClient()
-            tasks.append(
-                seedance.generate(
-                    reference_image=str(thumbnail_path),
-                    emotion_tags=prompts["emotion_tags"],
-                    output_dir=ASSETS_DIR,
-                    seed_id=seed_id,
-                )
-            )
-
-        results = await asyncio.gather(*tasks, return_exceptions=True)
-
-        sprite_path = None
-        icon_path = None
-        for r in results:
-            if isinstance(r, Exception):
-                logger.error("Generation sub-task error: %s", r)
-                continue
-            if isinstance(r, Path):
-                if r.suffix == ".mp4":
-                    sprite_path = await convert_video_to_spritesheet(
-                        r, ASSETS_DIR, seed_id
-                    )
-                elif "_icon" in r.stem:
-                    icon_path = r
-
-        # --- Step 4: Done ---
-        await _push(
-            ws,
-            seed_id,
-            "Ready",
-            "Weapon forged!",
-            glb_url=f"/assets/{seed_id}.glb" if glb_path else None,
-            sprite_url=f"/assets/{seed_id}_sprite.png" if sprite_path else None,
-            icon_url=f"/assets/{seed_id}_icon.png" if icon_path else None,
-            tripo_prompt=prompts["tripo_prompt"],
-            emotion_tags=prompts["emotion_tags"],
-        )
+        commands.append({
+            "type": "spawn_entity",
+            "id": "weapon_%s" % seed_id,
+            "model_path": str(glb_path) if glb_path else "",
+            "position": {"x": 0, "y": 1, "z": -2},
+            "rotation": {"x": 0, "y": 0, "z": 0},
+            "scale": {"x": 1, "y": 1, "z": 1},
+            "scripts": ["equippable"],
+        })
+        commands.append({
+            "type": "status",
+            "message": "Weapon forged: %s" % prompts["tripo_prompt"][:60],
+        })
 
     except Exception as e:
-        logger.exception("Forge pipeline failed for %s", seed_id)
-        await _push(ws, seed_id, "Failed", str(e))
+        logger.exception("Forge pipeline failed")
+        commands.append({"type": "status", "message": "Forge failed: %s" % str(e)})
+
+    return commands
+
+
+def _extract_growth_log(prompt: str) -> dict:
+    """Extract combat style hints from the user prompt."""
+    p = prompt.lower()
+    style = "balanced"
+    for s in ["fire", "ice", "lightning", "shadow", "holy"]:
+        if s in p:
+            style = "fire-heavy" if s == "fire" else s
+            break
+
+    anger = 5 if any(w in p for w in ["angry", "rage", "vengeful", "fury"]) else 1
+    damage = 2000 if any(w in p for w in ["powerful", "strong", "deadly"]) else 800
+
+    return {
+        "combatStyle": style,
+        "timeInSun": 0,
+        "angerEvents": anger,
+        "damageDealt": damage,
+    }
+
+
+def _spawn_placeholder(prompt: str) -> list[dict]:
+    """Spawn a placeholder entity from a natural language request."""
+    import uuid
+    words = prompt.lower().split()
+
+    entity_name = "entity"
+    for skip in ["add", "spawn", "create", "place", "a", "an", "the"]:
+        words = [w for w in words if w != skip]
+    if words:
+        entity_name = "_".join(words)
+
+    entity_id = "%s_%s" % (entity_name, str(uuid.uuid4())[:4])
+
+    return [{
+        "type": "spawn_entity",
+        "id": entity_id,
+        "model_path": "",
+        "position": {"x": float(hash(entity_id) % 10 - 5), "y": 0.5, "z": float(hash(entity_id + "z") % 10 - 5)},
+        "scripts": [],
+    }]
+
+
+def _remove_entity(prompt: str) -> list[dict]:
+    words = prompt.lower().split()
+    for skip in ["remove", "delete", "destroy", "the", "a", "an"]:
+        words = [w for w in words if w != skip]
+
+    if not words:
+        return [{"type": "status", "message": "Remove what? Specify an entity name."}]
+
+    target = "_".join(words)
+    return [{"type": "remove_entity", "id": target}]
+
+
+def _attach_behavior(prompt: str) -> list[dict]:
+    p = prompt.lower()
+
+    behavior = None
+    for b in ["wander", "move_to", "choppable", "equippable"]:
+        if b.replace("_", " ") in p or b in p:
+            behavior = b
+            break
+
+    if behavior is None:
+        return [{"type": "status", "message": "Unknown behavior in: %s" % prompt}]
+
+    return [{
+        "type": "attach_behavior",
+        "entity_id": "",
+        "behavior": behavior,
+        "params": {},
+    }, {
+        "type": "status",
+        "message": "Specify entity_id to attach '%s' to" % behavior,
+    }]
