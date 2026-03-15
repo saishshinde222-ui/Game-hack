@@ -2,17 +2,20 @@ extends Node
 ## 2D Entity registry — spawns Sprite2D / AnimatedSprite2D entities,
 ## attaches/detaches behavior scripts, manages lifecycle.
 ## Auto-scales sprites to a desired display height and places them on the ground.
+## Tracks texture paths so the MCP server can reference sprites for animation.
 
 const RuntimeLoader = preload("res://scripts/runtime_loader.gd")
 
 const BEHAVIOR_MAP := {
 	"wander": "res://scripts/behaviors/wander.gd",
 	"move_to": "res://scripts/behaviors/move_to.gd",
+	"player_control": "res://scripts/behaviors/player_control.gd",
 }
 
 const GROUND_Y := 597.0
 
 var _entities: Dictionary = {}
+var _texture_paths: Dictionary = {}
 var _scene_root: Node2D = null
 
 
@@ -20,8 +23,10 @@ func set_scene_root(root: Node2D):
 	_scene_root = root
 
 
-func register_entity(id: String, node: Node2D):
+func register_entity(id: String, node: Node2D, texture_path: String = ""):
 	_entities[id] = node
+	if texture_path != "":
+		_texture_paths[id] = texture_path
 
 
 func spawn_entity(id: String, texture_path: String, pos: Vector2, scl := Vector2.ONE, desired_height: float = 0.0) -> Node2D:
@@ -57,6 +62,7 @@ func spawn_entity(id: String, texture_path: String, pos: Vector2, scl := Vector2
 		return null
 
 	_entities[id] = sprite
+	_texture_paths[id] = texture_path
 	print("[EntityMgr] Spawned '%s' at %s (scale %s)" % [id, pos, scl])
 	return sprite
 
@@ -101,6 +107,7 @@ func spawn_animated_entity(id: String, spritesheet_path: String, frame_count: in
 		return null
 
 	_entities[id] = animated
+	_texture_paths[id] = spritesheet_path
 	print("[EntityMgr] Spawned animated '%s' at %s (scale %s)" % [id, pos, scl])
 	return animated
 
@@ -111,8 +118,14 @@ func update_animation(entity_id: String, anim_name: String, spritesheet_path: St
 		return
 
 	var node = _entities[entity_id]
+
+	if node is Sprite2D:
+		node = _convert_to_animated(entity_id, node)
+		if node == null:
+			return
+
 	if not node is AnimatedSprite2D:
-		push_error("[EntityMgr] '%s' is not AnimatedSprite2D" % entity_id)
+		push_error("[EntityMgr] '%s' cannot receive animations" % entity_id)
 		return
 
 	var animated: AnimatedSprite2D = node
@@ -149,6 +162,7 @@ func remove_entity(id: String):
 	var node: Node2D = _entities[id]
 	node.queue_free()
 	_entities.erase(id)
+	_texture_paths.erase(id)
 	print("[EntityMgr] Removed '%s'" % id)
 
 
@@ -212,16 +226,56 @@ func get_entity_info() -> Array:
 		for child in node.get_children():
 			if child.name in BEHAVIOR_MAP:
 				behaviors.append(child.name)
-		info.append({
+		var entry := {
 			"id": id,
 			"position": {"x": node.position.x, "y": node.position.y},
 			"behaviors": behaviors,
-		})
+		}
+		if _texture_paths.has(id):
+			entry["texture_path"] = _texture_paths[id]
+		info.append(entry)
 	return info
 
 
 func get_ground_y() -> float:
 	return GROUND_Y
+
+
+func _convert_to_animated(entity_id: String, sprite: Sprite2D) -> AnimatedSprite2D:
+	"""Replace a Sprite2D with an AnimatedSprite2D, preserving the original
+	texture as a single-frame 'idle' animation and moving all children over."""
+	var animated := AnimatedSprite2D.new()
+	animated.name = sprite.name
+	animated.position = sprite.position
+	animated.scale = sprite.scale
+
+	var sf := SpriteFrames.new()
+	if sf.has_animation("default"):
+		sf.remove_animation("default")
+	sf.add_animation("idle")
+	sf.set_animation_speed("idle", 1)
+	sf.set_animation_loop("idle", true)
+	if sprite.texture:
+		sf.add_frame("idle", sprite.texture)
+
+	animated.sprite_frames = sf
+	animated.play("idle")
+
+	var children_to_move: Array[Node] = []
+	for child in sprite.get_children():
+		children_to_move.append(child)
+	for child in children_to_move:
+		sprite.remove_child(child)
+		animated.add_child(child)
+
+	var parent = sprite.get_parent()
+	parent.remove_child(sprite)
+	sprite.queue_free()
+	parent.add_child(animated)
+
+	_entities[entity_id] = animated
+	print("[EntityMgr] Converted '%s' from Sprite2D → AnimatedSprite2D" % entity_id)
+	return animated
 
 
 func _create_placeholder_texture() -> ImageTexture:

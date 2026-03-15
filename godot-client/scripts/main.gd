@@ -12,7 +12,10 @@ func _ready():
 	var character = entity_root.get_node_or_null("Character")
 	if character and character is Sprite2D:
 		_setup_placeholder(character)
-		EntityManager.register_entity("character", character)
+		var tex_path := ""
+		if character.texture and character.texture.resource_path != "":
+			tex_path = ProjectSettings.globalize_path(character.texture.resource_path)
+		EntityManager.register_entity("character", character, tex_path)
 
 	input_field.text_submitted.connect(_on_input_submitted)
 

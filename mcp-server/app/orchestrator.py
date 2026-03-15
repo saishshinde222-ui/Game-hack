@@ -5,13 +5,16 @@ from pathlib import Path
 
 from app.clients.seedream import SeedreamClient
 from app.clients.seedance import SeedanceClient
+from app.utils.image_upload import upload_image
 from app.utils.sprites import convert_video_to_spritesheet, remove_background_and_trim
 
 logger = logging.getLogger(__name__)
 
+_entity_url_cache: dict[str, str] = {}
+
 SPAWN_WORDS = ["add", "spawn", "create", "place", "make", "generate", "build", "forge", "craft"]
 REMOVE_WORDS = ["remove", "delete", "destroy"]
-BEHAVIOR_WORDS = ["wander", "move to", "move_to"]
+BEHAVIOR_WORDS = ["wander", "move to", "move_to", "player_control", "control"]
 ANIMATE_WORDS = ["animate", "walk", "run", "idle", "attack", "dance", "jump"]
 
 DEFAULT_GROUND_Y = 597.0
@@ -117,6 +120,9 @@ async def _spawn_static_entity(prompt: str, assets_dir: Path) -> list[dict]:
 
         await remove_background_and_trim(result.path)
 
+        if result.url:
+            _entity_url_cache[entity_id] = result.url
+
         desired_h = DESIRED_HEIGHT_ITEM if is_item else DESIRED_HEIGHT_OBJECT
         spawn_x = random.randint(SPAWN_X_MIN, SPAWN_X_MAX)
 
@@ -155,6 +161,9 @@ async def _spawn_animated_entity(prompt: str, assets_dir: Path) -> list[dict]:
         ref_result = await seedream.generate(ref_prompt, assets_dir, seed_id)
 
         await remove_background_and_trim(ref_result.path)
+
+        if ref_result.url:
+            _entity_url_cache[entity_id] = ref_result.url
 
         commands.append({"type": "status", "message": "Reference sprite ready, generating animation..."})
 
@@ -228,16 +237,32 @@ async def _animate_existing_entity(
 
     commands.append({"type": "status", "message": "Generating %s animation for %s..." % (animation_name, entity_id)})
 
+    image_url = await _resolve_entity_image_url(entity_id, context, assets_dir)
+
     try:
         seedance = SeedanceClient()
-        anim_prompt = "2D game character %s animation cycle, side view, smooth motion, clean background" % animation_name
-
-        video_path = await seedance.text_to_video(
-            prompt=anim_prompt,
-            output_dir=assets_dir,
-            seed_id=seed_id,
-            ratio="1:1",
+        anim_prompt = (
+            "2D game character %s animation cycle, side view, smooth looping motion, "
+            "white background" % animation_name
         )
+
+        if image_url:
+            commands.append({"type": "status", "message": "Using entity sprite as reference..."})
+            video_path = await seedance.image_to_video(
+                image_url=image_url,
+                prompt=anim_prompt,
+                output_dir=assets_dir,
+                seed_id=seed_id,
+                ratio="1:1",
+            )
+        else:
+            commands.append({"type": "status", "message": "No sprite found, using text-to-video..."})
+            video_path = await seedance.text_to_video(
+                prompt=anim_prompt,
+                output_dir=assets_dir,
+                seed_id=seed_id,
+                ratio="1:1",
+            )
 
         if video_path and video_path.exists():
             meta = await convert_video_to_spritesheet(
@@ -255,7 +280,13 @@ async def _animate_existing_entity(
                     "columns": meta.columns,
                     "fps": 8,
                 })
-                commands.append({"type": "status", "message": "Animation '%s' applied to %s" % (animation_name, entity_id)})
+                commands.append({
+                    "type": "attach_behavior",
+                    "entity_id": entity_id,
+                    "behavior": "player_control",
+                    "params": {},
+                })
+                commands.append({"type": "status", "message": "Animation '%s' applied to %s with player controls" % (animation_name, entity_id)})
                 return commands
 
         commands.append({"type": "status", "message": "Animation generation failed for %s" % entity_id})
@@ -265,6 +296,40 @@ async def _animate_existing_entity(
         commands.append({"type": "status", "message": "Animation failed: %s" % str(e)})
 
     return commands
+
+
+async def _resolve_entity_image_url(
+    entity_id: str, context: dict, assets_dir: Path
+) -> str | None:
+    """Get a public URL for an entity's sprite texture.
+
+    Checks the in-memory cache first (populated when MCP spawns entities via
+    Seedream).  Falls back to uploading the local texture file to get a URL.
+    """
+    if entity_id in _entity_url_cache:
+        return _entity_url_cache[entity_id]
+
+    texture_path = _get_entity_texture_path(entity_id, context)
+    if not texture_path:
+        return None
+
+    local = Path(texture_path)
+    if not local.exists():
+        logger.warning("Texture file not found: %s", texture_path)
+        return None
+
+    url = await upload_image(local)
+    if url:
+        _entity_url_cache[entity_id] = url
+    return url
+
+
+def _get_entity_texture_path(entity_id: str, context: dict) -> str | None:
+    """Extract the texture_path for a given entity from the context JSON."""
+    for ent in context.get("entities", []):
+        if isinstance(ent, dict) and ent.get("id") == entity_id:
+            return ent.get("texture_path")
+    return None
 
 
 # ---------------------------------------------------------------------------
@@ -283,7 +348,7 @@ def _remove_entity(prompt: str) -> list[dict]:
 def _attach_behavior(prompt: str) -> list[dict]:
     p = prompt.lower()
     behavior = None
-    for b in ["wander", "move_to"]:
+    for b in ["player_control", "wander", "move_to"]:
         if b.replace("_", " ") in p or b in p:
             behavior = b
             break
