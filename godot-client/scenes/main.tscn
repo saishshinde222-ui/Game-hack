@@ -1,46 +1,50 @@
-[gd_scene load_steps=6 format=3]
+[gd_scene format=3 uid="uid://cn1th4vlnxift"]
 
-[ext_resource type="Script" path="res://scripts/main.gd" id="1"]
-[ext_resource type="Script" path="res://scripts/behaviors/holdable_slot.gd" id="2"]
+[ext_resource type="Script" uid="uid://deoimb2nvpt8l" path="res://scripts/main.gd" id="1"]
+[ext_resource type="Texture2D" uid="uid://0vm63ko8ian7" path="res://assets/sprites/Gemini_Generated_Image_tva87ttva87ttva8.png" id="2_0wfyh"]
+[ext_resource type="Texture2D" uid="uid://bhc62hdcvda5" path="res://assets/sprites/pixel-art-of-young-boy-in-casual-outfit-standing-pose-with-brown-hair-wearing-jacket-jeans-and-sneakers-detailed-sprite-for-videogame-projects-png.png" id="2_sugp2"]
 
-[sub_resource type="PlaneMesh" id="PlaneMesh_1"]
-size = Vector2(20, 20)
+[sub_resource type="RectangleShape2D" id="RectangleShape2D_sugp2"]
+size = Vector2(1297, 89)
 
-[sub_resource type="StandardMaterial3D" id="Mat_Ground"]
-albedo_color = Color(0.15, 0.18, 0.12, 1)
-
-[sub_resource type="CapsuleMesh" id="CapsuleMesh_1"]
-
-[node name="Main" type="Node3D"]
+[node name="Main" type="Node2D" unique_id=597014634]
 script = ExtResource("1")
 
-[node name="Camera3D" type="Camera3D" parent="."]
-transform = Transform3D(1, 0, 0, 0, 0.866, 0.5, 0, -0.5, 0.866, 0, 4, 6)
+[node name="Background" type="ColorRect" parent="." unique_id=1986922413]
+visible = false
+offset_right = 1280.0
+offset_bottom = 720.0
 
-[node name="DirectionalLight3D" type="DirectionalLight3D" parent="."]
-transform = Transform3D(1, 0, 0, 0, 0.707, 0.707, 0, -0.707, 0.707, 0, 8, 0)
-shadow_enabled = true
+[node name="Camera2D" type="Camera2D" parent="." unique_id=641421950]
+position = Vector2(640, 360)
 
-[node name="Ground" type="MeshInstance3D" parent="."]
-mesh = SubResource("PlaneMesh_1")
-material_override = SubResource("Mat_Ground")
-
-[node name="EntityRoot" type="Node3D" parent="."]
+[node name="EntityRoot" type="Node2D" parent="." unique_id=357601815]
 unique_name_in_owner = true
 
-[node name="Character" type="Node3D" parent="EntityRoot"]
-transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0.75, 0)
+[node name="Ground" type="StaticBody2D" parent="EntityRoot" unique_id=454838479]
+position = Vector2(-3, -39)
 
-[node name="Body" type="MeshInstance3D" parent="EntityRoot/Character"]
-mesh = SubResource("CapsuleMesh_1")
+[node name="CollisionShape2D" type="CollisionShape2D" parent="EntityRoot/Ground" unique_id=1925842955]
+position = Vector2(640.5, 680)
+shape = SubResource("RectangleShape2D_sugp2")
 
-[node name="HoldableSlot" type="Marker3D" parent="EntityRoot/Character"]
-transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0.5, 0.3, 0)
-script = ExtResource("2")
+[node name="StaticBody2D" type="StaticBody2D" parent="EntityRoot" unique_id=1536195310]
+position = Vector2(78, -80)
 
-[node name="UI" type="CanvasLayer" parent="."]
+[node name="Character" type="Sprite2D" parent="EntityRoot/StaticBody2D" unique_id=225031309]
+position = Vector2(644, 504)
+scale = Vector2(0.31714284, 0.31714284)
+texture = ExtResource("2_sugp2")
 
-[node name="TopBar" type="HBoxContainer" parent="UI"]
+[node name="Sprite2D" type="Sprite2D" parent="." unique_id=38316478]
+z_index = -1
+position = Vector2(862, 394)
+scale = Vector2(0.5968726, 0.5968726)
+texture = ExtResource("2_0wfyh")
+
+[node name="UI" type="CanvasLayer" parent="." unique_id=640433613]
+
+[node name="TopBar" type="HBoxContainer" parent="UI" unique_id=16638166]
 anchors_preset = 10
 anchor_right = 1.0
 offset_left = 10.0
@@ -48,53 +52,13 @@ offset_top = 10.0
 offset_right = -10.0
 offset_bottom = 50.0
 
-[node name="InputField" type="LineEdit" parent="UI/TopBar"]
+[node name="InputField" type="LineEdit" parent="UI/TopBar" unique_id=1521621119]
 unique_name_in_owner = true
 layout_mode = 2
 size_flags_horizontal = 3
-placeholder_text = "Type a command... (e.g. forge me a fire sword)"
+placeholder_text = "Type a command..."
 
-[node name="StatusLabel" type="Label" parent="UI/TopBar"]
+[node name="StatusLabel" type="Label" parent="UI/TopBar" unique_id=1781927197]
 unique_name_in_owner = true
 layout_mode = 2
 text = "Waiting for MCP..."
-
-[node name="EmotionPanel" type="PanelContainer" parent="UI"]
-unique_name_in_owner = true
-anchors_preset = 1
-anchor_left = 1.0
-anchor_right = 1.0
-offset_left = -280.0
-offset_top = 60.0
-offset_right = -10.0
-offset_bottom = 460.0
-
-[node name="VBox" type="VBoxContainer" parent="UI/EmotionPanel"]
-layout_mode = 2
-
-[node name="EmotionTitle" type="Label" parent="UI/EmotionPanel/VBox"]
-unique_name_in_owner = true
-layout_mode = 2
-text = "CHARACTER EMOTION"
-horizontal_alignment = 1
-
-[node name="Portrait" type="TextureRect" parent="UI/EmotionPanel/VBox"]
-unique_name_in_owner = true
-layout_mode = 2
-custom_minimum_size = Vector2(256, 256)
-expand_mode = 1
-stretch_mode = 5
-
-[node name="EmotionLabel" type="Label" parent="UI/EmotionPanel/VBox"]
-unique_name_in_owner = true
-layout_mode = 2
-text = "..."
-horizontal_alignment = 1
-autowrap_mode = 2
-
-[node name="EmotionDesc" type="Label" parent="UI/EmotionPanel/VBox"]
-unique_name_in_owner = true
-layout_mode = 2
-text = ""
-horizontal_alignment = 1
-autowrap_mode = 2

@@ -1,32 +1,32 @@
 extends Node
-## Moves the parent Node3D toward a target position, emits arrived when close.
+## Moves the parent Node2D toward a target position, emits arrived when close.
 
 signal arrived()
 
-@export var target_position: Vector3 = Vector3.ZERO
-@export var speed: float = 3.0
-@export var arrive_distance: float = 0.2
+@export var target_position: Vector2 = Vector2.ZERO
+@export var speed: float = 100.0
+@export var arrive_distance: float = 5.0
 
 var _moving := false
 
 
 func _ready():
-	if target_position != Vector3.ZERO:
+	if target_position != Vector2.ZERO:
 		_moving = true
 
 
-func set_target(pos: Vector3):
+func set_target(pos: Vector2):
 	target_position = pos
 	_moving = true
 
 
-func _process(delta):
+func _process(delta: float):
 	if not _moving:
 		return
 
 	var parent = get_parent()
-	var direction = (target_position - parent.position)
-	var dist = direction.length()
+	var direction: Vector2 = target_position - parent.position
+	var dist: float = direction.length()
 
 	if dist <= arrive_distance:
 		parent.position = target_position
@@ -35,8 +35,3 @@ func _process(delta):
 		return
 
 	parent.position += direction.normalized() * speed * delta
-
-	var look_target = target_position
-	look_target.y = parent.position.y
-	if parent.position.distance_to(look_target) > 0.01:
-		parent.look_at(look_target)

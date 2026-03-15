@@ -1,18 +1,18 @@
-extends Node3D
-## Root scene script — routes MCP commands, handles text input,
-## manages emotion portrait, gathers context.
+extends Node2D
+## Root 2D scene script — routes MCP commands, handles text input, gathers context.
 
 @onready var input_field: LineEdit = %InputField
 @onready var status_label: Label = %StatusLabel
-@onready var entity_root: Node3D = %EntityRoot
-@onready var portrait: TextureRect = %Portrait
-@onready var emotion_label: Label = %EmotionLabel
-@onready var emotion_desc: Label = %EmotionDesc
-@onready var emotion_title: Label = %EmotionTitle
+@onready var entity_root: Node2D = %EntityRoot
 
 
 func _ready():
 	EntityManager.set_scene_root(entity_root)
+
+	var character = entity_root.get_node_or_null("Character")
+	if character and character is Sprite2D:
+		_setup_placeholder(character)
+		EntityManager.register_entity("character", character)
 
 	input_field.text_submitted.connect(_on_input_submitted)
 
@@ -24,6 +24,14 @@ func _ready():
 	CommandServer.client_disconnected.connect(func():
 		status_label.text = "MCP disconnected — waiting..."
 	)
+
+
+func _setup_placeholder(sprite: Sprite2D):
+	if sprite.texture != null:
+		return
+	var img := Image.create(32, 48, false, Image.FORMAT_RGBA8)
+	img.fill(Color(0.4, 0.6, 0.9))
+	sprite.texture = ImageTexture.create_from_image(img)
 
 
 func _on_input_submitted(text: String):
@@ -38,24 +46,44 @@ func _on_input_submitted(text: String):
 
 
 func _on_command(cmd: Dictionary):
-	var cmd_type = cmd.get("type", "")
+	var cmd_type: String = cmd.get("type", "")
 
 	match cmd_type:
 		"spawn_entity":
-			var pos = _dict_to_vec3(cmd.get("position", {}))
-			var rot = _dict_to_vec3(cmd.get("rotation", {}))
-			var scl = _dict_to_vec3(cmd.get("scale", {"x": 1, "y": 1, "z": 1}))
+			var pos = _dict_to_vec2(cmd.get("position", {}))
+			var scl = _dict_to_vec2(cmd.get("scale", {"x": 1, "y": 1}))
+			var dh = float(cmd.get("desired_height", 0))
 			EntityManager.spawn_entity(
 				cmd.get("id", "entity_%d" % randi()),
-				cmd.get("model_path", ""),
-				pos, rot, scl,
-				cmd.get("scripts", [])
+				cmd.get("texture_path", ""),
+				pos, scl, dh,
 			)
 			status_label.text = "Spawned: %s" % cmd.get("id", "?")
 
-		"remove_entity":
-			EntityManager.remove_entity(cmd.get("id", ""))
-			status_label.text = "Removed: %s" % cmd.get("id", "?")
+		"spawn_animated_entity":
+			var pos = _dict_to_vec2(cmd.get("position", {}))
+			var scl = _dict_to_vec2(cmd.get("scale", {"x": 1, "y": 1}))
+			var dh = float(cmd.get("desired_height", 0))
+			EntityManager.spawn_animated_entity(
+				cmd.get("id", "entity_%d" % randi()),
+				cmd.get("spritesheet_path", ""),
+				int(cmd.get("frame_count", 1)),
+				int(cmd.get("columns", 1)),
+				float(cmd.get("fps", 8)),
+				pos, scl, dh,
+			)
+			status_label.text = "Spawned animated: %s" % cmd.get("id", "?")
+
+		"update_animation":
+			EntityManager.update_animation(
+				cmd.get("entity_id", ""),
+				cmd.get("animation_name", "default"),
+				cmd.get("spritesheet_path", ""),
+				int(cmd.get("frame_count", 1)),
+				int(cmd.get("columns", 1)),
+				float(cmd.get("fps", 8)),
+			)
+			status_label.text = "Animation updated"
 
 		"attach_behavior":
 			EntityManager.attach_behavior(
@@ -70,66 +98,17 @@ func _on_command(cmd: Dictionary):
 				cmd.get("entity_id", ""),
 				cmd.get("behavior", "")
 			)
+			status_label.text = "Behavior detached"
 
-		"equip_item":
-			EntityManager.equip_item(
-				cmd.get("holder_id", ""),
-				cmd.get("item_id", "")
-			)
-			status_label.text = "Item equipped"
-
-		"interact":
-			EntityManager.interact(
-				cmd.get("actor_id", ""),
-				cmd.get("target_id", ""),
-				cmd.get("action", "")
-			)
-
-		"update_portrait":
-			_update_portrait(cmd)
-
-		"add_script":
-			_write_script(cmd.get("path", ""), cmd.get("source_code", ""))
+		"remove_entity":
+			EntityManager.remove_entity(cmd.get("id", ""))
+			status_label.text = "Removed: %s" % cmd.get("id", "?")
 
 		"status":
 			status_label.text = cmd.get("message", "")
 
 		_:
 			push_warning("[Main] Unknown command: %s" % cmd_type)
-
-
-func _update_portrait(cmd: Dictionary):
-	var image_url = cmd.get("image_url", "")
-	var emotion = cmd.get("emotion", "")
-	var description = cmd.get("description", "")
-
-	emotion_label.text = emotion.to_upper()
-	emotion_desc.text = description
-
-	if image_url != "":
-		_download_portrait(image_url)
-
-
-func _download_portrait(url_path: String):
-	var http = HTTPRequest.new()
-	add_child(http)
-
-	var base_url = "http://localhost:8000"
-	http.request_completed.connect(
-		func(_result, code, _headers, body):
-			if code == 200:
-				var img = Image.new()
-				var err = img.load_png_from_buffer(body)
-				if err == OK:
-					var tex = ImageTexture.create_from_image(img)
-					portrait.texture = tex
-				else:
-					push_error("Portrait PNG decode failed")
-			else:
-				push_error("Portrait download failed: %d" % code)
-			http.queue_free()
-	)
-	http.request(base_url + url_path)
 
 
 func _on_context_requested():
@@ -139,7 +118,7 @@ func _on_context_requested():
 
 func _gather_context() -> Dictionary:
 	var files = _list_files("res://scripts/", [])
-	var scripts_content = {}
+	var scripts_content := {}
 	for path in files:
 		if path.ends_with(".gd"):
 			var f = FileAccess.open(path, FileAccess.READ)
@@ -154,6 +133,8 @@ func _gather_context() -> Dictionary:
 		"script_contents": scripts_content,
 		"asset_files": asset_files,
 		"entities": EntityManager.get_entity_info(),
+		"ground_y": EntityManager.get_ground_y(),
+		"viewport": {"width": 1280, "height": 720},
 	}
 
 
@@ -176,18 +157,8 @@ func _list_files(path: String, result: Array) -> Array:
 	return result
 
 
-func _write_script(path: String, source: String):
-	if path == "" or source == "":
-		return
-	var f = FileAccess.open(path, FileAccess.WRITE)
-	if f:
-		f.store_string(source)
-		f.close()
-
-
-func _dict_to_vec3(d: Dictionary) -> Vector3:
-	return Vector3(
+func _dict_to_vec2(d: Dictionary) -> Vector2:
+	return Vector2(
 		float(d.get("x", 0)),
-		float(d.get("y", 0)),
-		float(d.get("z", 0))
+		float(d.get("y", 0))
 	)

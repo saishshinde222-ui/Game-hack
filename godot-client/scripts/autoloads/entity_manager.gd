@@ -1,56 +1,144 @@
 extends Node
-## Entity registry — spawns entities, attaches/detaches behaviors, manages lifecycle.
+## 2D Entity registry — spawns Sprite2D / AnimatedSprite2D entities,
+## attaches/detaches behavior scripts, manages lifecycle.
+## Auto-scales sprites to a desired display height and places them on the ground.
 
 const RuntimeLoader = preload("res://scripts/runtime_loader.gd")
 
 const BEHAVIOR_MAP := {
 	"wander": "res://scripts/behaviors/wander.gd",
 	"move_to": "res://scripts/behaviors/move_to.gd",
-	"choppable": "res://scripts/behaviors/choppable.gd",
-	"equippable": "res://scripts/behaviors/equippable.gd",
 }
 
+const GROUND_Y := 597.0
+
 var _entities: Dictionary = {}
-var _scene_root: Node3D = null
+var _scene_root: Node2D = null
 
 
-func set_scene_root(root: Node3D):
+func set_scene_root(root: Node2D):
 	_scene_root = root
 
 
-func spawn_entity(id: String, model_path: String, pos: Vector3, rot := Vector3.ZERO, scl := Vector3.ONE, scripts: Array = []) -> Node3D:
+func register_entity(id: String, node: Node2D):
+	_entities[id] = node
+
+
+func spawn_entity(id: String, texture_path: String, pos: Vector2, scl := Vector2.ONE, desired_height: float = 0.0) -> Node2D:
 	if _entities.has(id):
 		push_warning("[EntityMgr] Entity '%s' already exists, removing old" % id)
 		remove_entity(id)
 
-	var node: Node3D = null
+	var sprite := Sprite2D.new()
+	var tex = RuntimeLoader.load_texture(texture_path)
+	if tex:
+		sprite.texture = tex
+	else:
+		sprite.texture = _create_placeholder_texture()
 
-	if model_path != "" and FileAccess.file_exists(model_path):
-		node = RuntimeLoader.load_glb(model_path)
-	elif model_path != "" and ResourceLoader.exists(model_path):
-		node = RuntimeLoader.load_glb_from_res(model_path)
+	if desired_height > 0.0 and sprite.texture:
+		var tex_h: float = sprite.texture.get_height()
+		if tex_h > 0.0:
+			var s: float = desired_height / tex_h
+			scl = Vector2(s, s)
 
-	if node == null:
-		node = _create_placeholder()
+	sprite.name = id
+	sprite.scale = scl
 
-	node.name = id
-	node.position = pos
-	node.rotation_degrees = rot
-	node.scale = scl
+	if pos.y <= 0.0 and sprite.texture:
+		var displayed_h: float = sprite.texture.get_height() * scl.y
+		pos.y = GROUND_Y - displayed_h * 0.5
+	sprite.position = pos
 
 	if _scene_root:
-		_scene_root.add_child(node)
+		_scene_root.add_child(sprite)
 	else:
 		push_error("[EntityMgr] No scene root set")
 		return null
 
-	_entities[id] = node
+	_entities[id] = sprite
+	print("[EntityMgr] Spawned '%s' at %s (scale %s)" % [id, pos, scl])
+	return sprite
 
-	for behavior_key in scripts:
-		attach_behavior(id, behavior_key, {})
 
-	print("[EntityMgr] Spawned '%s' at %s" % [id, pos])
-	return node
+func spawn_animated_entity(id: String, spritesheet_path: String, frame_count: int, columns: int, fps: float, pos: Vector2, scl := Vector2.ONE, desired_height: float = 0.0) -> Node2D:
+	if _entities.has(id):
+		push_warning("[EntityMgr] Entity '%s' already exists, removing old" % id)
+		remove_entity(id)
+
+	var rows := ceili(float(frame_count) / float(columns))
+	var sf = RuntimeLoader.load_spritesheet(spritesheet_path, columns, rows, frame_count, fps)
+
+	var animated := AnimatedSprite2D.new()
+	if sf:
+		animated.sprite_frames = sf
+		animated.play("default")
+	else:
+		push_error("[EntityMgr] Failed to load spritesheet for '%s'" % id)
+
+	if desired_height > 0.0 and sf:
+		var first_frame = sf.get_frame_texture("default", 0)
+		if first_frame:
+			var tex_h: float = first_frame.get_height()
+			if tex_h > 0.0:
+				var s: float = desired_height / tex_h
+				scl = Vector2(s, s)
+
+	animated.name = id
+	animated.scale = scl
+
+	if pos.y <= 0.0 and sf:
+		var first_frame = sf.get_frame_texture("default", 0)
+		if first_frame:
+			var displayed_h: float = first_frame.get_height() * scl.y
+			pos.y = GROUND_Y - displayed_h * 0.5
+	animated.position = pos
+
+	if _scene_root:
+		_scene_root.add_child(animated)
+	else:
+		push_error("[EntityMgr] No scene root set")
+		return null
+
+	_entities[id] = animated
+	print("[EntityMgr] Spawned animated '%s' at %s (scale %s)" % [id, pos, scl])
+	return animated
+
+
+func update_animation(entity_id: String, anim_name: String, spritesheet_path: String, frame_count: int, columns: int, fps: float):
+	if not _entities.has(entity_id):
+		push_error("[EntityMgr] Entity '%s' not found" % entity_id)
+		return
+
+	var node = _entities[entity_id]
+	if not node is AnimatedSprite2D:
+		push_error("[EntityMgr] '%s' is not AnimatedSprite2D" % entity_id)
+		return
+
+	var animated: AnimatedSprite2D = node
+	var rows := ceili(float(frame_count) / float(columns))
+	var new_sf = RuntimeLoader.load_spritesheet(spritesheet_path, columns, rows, frame_count, fps)
+	if new_sf == null:
+		push_error("[EntityMgr] Failed to load spritesheet for animation '%s'" % anim_name)
+		return
+
+	var existing = animated.sprite_frames
+	if existing == null:
+		existing = SpriteFrames.new()
+		animated.sprite_frames = existing
+
+	if existing.has_animation(anim_name):
+		existing.remove_animation(anim_name)
+
+	existing.add_animation(anim_name)
+	existing.set_animation_speed(anim_name, fps)
+	existing.set_animation_loop(anim_name, true)
+
+	for i in range(new_sf.get_frame_count("default")):
+		existing.add_frame(anim_name, new_sf.get_frame_texture("default", i))
+
+	animated.play(anim_name)
+	print("[EntityMgr] Updated animation '%s' on '%s'" % [anim_name, entity_id])
 
 
 func remove_entity(id: String):
@@ -58,7 +146,7 @@ func remove_entity(id: String):
 		push_warning("[EntityMgr] Entity '%s' not found" % id)
 		return
 
-	var node: Node3D = _entities[id]
+	var node: Node2D = _entities[id]
 	node.queue_free()
 	_entities.erase(id)
 	print("[EntityMgr] Removed '%s'" % id)
@@ -73,7 +161,7 @@ func attach_behavior(entity_id: String, behavior_key: String, params: Dictionary
 		push_error("[EntityMgr] Unknown behavior: '%s'" % behavior_key)
 		return
 
-	var entity: Node3D = _entities[entity_id]
+	var entity: Node2D = _entities[entity_id]
 
 	for child in entity.get_children():
 		if child.name == behavior_key:
@@ -87,7 +175,10 @@ func attach_behavior(entity_id: String, behavior_key: String, params: Dictionary
 
 	for key in params:
 		if key in behavior_node:
-			behavior_node.set(key, params[key])
+			var value = params[key]
+			if value is Dictionary and value.has("x") and value.has("y"):
+				value = Vector2(float(value.x), float(value.y))
+			behavior_node.set(key, value)
 
 	entity.add_child(behavior_node)
 	print("[EntityMgr] Attached '%s' to '%s'" % [behavior_key, entity_id])
@@ -97,7 +188,7 @@ func detach_behavior(entity_id: String, behavior_key: String):
 	if not _entities.has(entity_id):
 		return
 
-	var entity: Node3D = _entities[entity_id]
+	var entity: Node2D = _entities[entity_id]
 	for child in entity.get_children():
 		if child.name == behavior_key:
 			child.queue_free()
@@ -105,44 +196,7 @@ func detach_behavior(entity_id: String, behavior_key: String):
 			return
 
 
-func equip_item(holder_id: String, item_id: String):
-	if not _entities.has(holder_id) or not _entities.has(item_id):
-		push_error("[EntityMgr] equip_item: missing entity")
-		return
-
-	var holder: Node3D = _entities[holder_id]
-	var item: Node3D = _entities[item_id]
-
-	var slot = holder.find_child("HoldableSlot", true, false)
-	if slot == null:
-		push_error("[EntityMgr] No HoldableSlot on '%s'" % holder_id)
-		return
-
-	if item.get_parent():
-		item.get_parent().remove_child(item)
-	slot.add_child(item)
-	item.position = Vector3.ZERO
-	item.rotation = Vector3.ZERO
-	print("[EntityMgr] Equipped '%s' on '%s'" % [item_id, holder_id])
-
-
-func interact(actor_id: String, target_id: String, action: String):
-	if not _entities.has(target_id):
-		push_error("[EntityMgr] interact: target '%s' not found" % target_id)
-		return
-
-	var target: Node3D = _entities[target_id]
-
-	for child in target.get_children():
-		if child.has_method(action):
-			child.call(action)
-			print("[EntityMgr] '%s' performed '%s' on '%s'" % [actor_id, action, target_id])
-			return
-
-	push_warning("[EntityMgr] No method '%s' on '%s'" % [action, target_id])
-
-
-func get_entity(id: String) -> Node3D:
+func get_entity(id: String) -> Node2D:
 	return _entities.get(id)
 
 
@@ -151,30 +205,26 @@ func get_all_entity_ids() -> Array:
 
 
 func get_entity_info() -> Array:
-	var info = []
+	var info := []
 	for id in _entities:
-		var node: Node3D = _entities[id]
-		var behaviors = []
+		var node: Node2D = _entities[id]
+		var behaviors := []
 		for child in node.get_children():
 			if child.name in BEHAVIOR_MAP:
 				behaviors.append(child.name)
 		info.append({
 			"id": id,
-			"position": {"x": node.position.x, "y": node.position.y, "z": node.position.z},
+			"position": {"x": node.position.x, "y": node.position.y},
 			"behaviors": behaviors,
 		})
 	return info
 
 
-func _create_placeholder() -> Node3D:
-	var node = Node3D.new()
-	var mesh_instance = MeshInstance3D.new()
-	var capsule = CapsuleMesh.new()
-	capsule.radius = 0.3
-	capsule.height = 1.0
-	mesh_instance.mesh = capsule
-	var mat = StandardMaterial3D.new()
-	mat.albedo_color = Color(0.8, 0.3, 0.8)
-	mesh_instance.material_override = mat
-	node.add_child(mesh_instance)
-	return node
+func get_ground_y() -> float:
+	return GROUND_Y
+
+
+func _create_placeholder_texture() -> ImageTexture:
+	var img := Image.create(32, 48, false, Image.FORMAT_RGBA8)
+	img.fill(Color(0.8, 0.3, 0.8))
+	return ImageTexture.create_from_image(img)
