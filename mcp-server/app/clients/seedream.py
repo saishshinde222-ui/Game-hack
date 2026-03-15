@@ -18,11 +18,19 @@ class SeedreamClient:
         )
 
     async def generate(self, prompt: str, output_dir: Path, seed_id: str) -> Path:
+        """Generate a generic image (icon, asset, etc.)."""
         icon_path = output_dir / f"{seed_id}_icon.png"
+        return await self._generate_image(prompt, icon_path, "512x512")
 
+    async def generate_face(self, prompt: str, output_dir: Path, seed_id: str) -> Path:
+        """Generate a character face portrait with emotion."""
+        face_path = output_dir / f"{seed_id}_face.png"
+        return await self._generate_image(prompt, face_path, "512x512")
+
+    async def _generate_image(self, prompt: str, output_path: Path, size: str) -> Path:
         if not self.api_key:
-            logger.warning("SEEDREAM_API_KEY not set — using placeholder icon")
-            return self._write_placeholder(icon_path)
+            logger.warning("SEEDREAM_API_KEY not set — using placeholder")
+            return self._write_placeholder(output_path)
 
         async with httpx.AsyncClient(timeout=60) as client:
             resp = await client.post(
@@ -35,20 +43,20 @@ class SeedreamClient:
                     "model": "seedream-5.0-lite",
                     "prompt": prompt,
                     "n": 1,
-                    "size": "512x512",
+                    "size": size,
                 },
             )
             resp.raise_for_status()
             image_url = resp.json()["data"][0]["url"]
 
             img_resp = await client.get(image_url)
-            icon_path.write_bytes(img_resp.content)
-            logger.info("Saved icon: %s", icon_path)
-            return icon_path
+            output_path.write_bytes(img_resp.content)
+            logger.info("Saved image: %s", output_path)
+            return output_path
 
     @staticmethod
     def _write_placeholder(path: Path) -> Path:
-        """Write a minimal 64x64 dark-purple PNG as placeholder."""
+        """64x64 dark-purple placeholder PNG."""
         w, h = 64, 64
         raw = b""
         for _ in range(h):

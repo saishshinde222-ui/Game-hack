@@ -1,10 +1,14 @@
 extends Node3D
-## Root scene script — handles text input, routes MCP commands to EntityManager,
-## gathers project context and sends to MCP.
+## Root scene script — routes MCP commands, handles text input,
+## manages emotion portrait, gathers context.
 
 @onready var input_field: LineEdit = %InputField
 @onready var status_label: Label = %StatusLabel
 @onready var entity_root: Node3D = %EntityRoot
+@onready var portrait: TextureRect = %Portrait
+@onready var emotion_label: Label = %EmotionLabel
+@onready var emotion_desc: Label = %EmotionDesc
+@onready var emotion_title: Label = %EmotionTitle
 
 
 func _ready():
@@ -15,7 +19,7 @@ func _ready():
 	CommandServer.command_received.connect(_on_command)
 	CommandServer.context_requested.connect(_on_context_requested)
 	CommandServer.client_connected.connect(func():
-		status_label.text = "MCP connected"
+		status_label.text = "MCP connected — ready"
 	)
 	CommandServer.client_disconnected.connect(func():
 		status_label.text = "MCP disconnected — waiting..."
@@ -80,17 +84,52 @@ func _on_command(cmd: Dictionary):
 				cmd.get("target_id", ""),
 				cmd.get("action", "")
 			)
-			status_label.text = "Interaction: %s" % cmd.get("action", "?")
+
+		"update_portrait":
+			_update_portrait(cmd)
 
 		"add_script":
 			_write_script(cmd.get("path", ""), cmd.get("source_code", ""))
-			status_label.text = "Script written: %s" % cmd.get("path", "?")
 
 		"status":
 			status_label.text = cmd.get("message", "")
 
 		_:
-			push_warning("[Main] Unknown command type: %s" % cmd_type)
+			push_warning("[Main] Unknown command: %s" % cmd_type)
+
+
+func _update_portrait(cmd: Dictionary):
+	var image_url = cmd.get("image_url", "")
+	var emotion = cmd.get("emotion", "")
+	var description = cmd.get("description", "")
+
+	emotion_label.text = emotion.to_upper()
+	emotion_desc.text = description
+
+	if image_url != "":
+		_download_portrait(image_url)
+
+
+func _download_portrait(url_path: String):
+	var http = HTTPRequest.new()
+	add_child(http)
+
+	var base_url = "http://localhost:8000"
+	http.request_completed.connect(
+		func(_result, code, _headers, body):
+			if code == 200:
+				var img = Image.new()
+				var err = img.load_png_from_buffer(body)
+				if err == OK:
+					var tex = ImageTexture.create_from_image(img)
+					portrait.texture = tex
+				else:
+					push_error("Portrait PNG decode failed")
+			else:
+				push_error("Portrait download failed: %d" % code)
+			http.queue_free()
+	)
+	http.request(base_url + url_path)
 
 
 func _on_context_requested():
@@ -144,7 +183,6 @@ func _write_script(path: String, source: String):
 	if f:
 		f.store_string(source)
 		f.close()
-		print("[Main] Wrote script: %s" % path)
 
 
 func _dict_to_vec3(d: Dictionary) -> Vector3:

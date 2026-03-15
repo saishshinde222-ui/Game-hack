@@ -1,4 +1,4 @@
-[gd_scene load_steps=5 format=3]
+[gd_scene load_steps=6 format=3]
 
 [ext_resource type="Script" path="res://scripts/main.gd" id="1"]
 [ext_resource type="Script" path="res://scripts/behaviors/holdable_slot.gd" id="2"]
@@ -7,7 +7,9 @@
 size = Vector2(20, 20)
 
 [sub_resource type="StandardMaterial3D" id="Mat_Ground"]
-albedo_color = Color(0.25, 0.28, 0.22, 1)
+albedo_color = Color(0.15, 0.18, 0.12, 1)
+
+[sub_resource type="CapsuleMesh" id="CapsuleMesh_1"]
 
 [node name="Main" type="Node3D"]
 script = ExtResource("1")
@@ -30,7 +32,7 @@ unique_name_in_owner = true
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0.75, 0)
 
 [node name="Body" type="MeshInstance3D" parent="EntityRoot/Character"]
-mesh = CapsuleMesh.new()
+mesh = SubResource("CapsuleMesh_1")
 
 [node name="HoldableSlot" type="Marker3D" parent="EntityRoot/Character"]
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0.5, 0.3, 0)
@@ -41,18 +43,58 @@ script = ExtResource("2")
 [node name="TopBar" type="HBoxContainer" parent="UI"]
 anchors_preset = 10
 anchor_right = 1.0
-offset_bottom = 40.0
 offset_left = 10.0
-offset_right = -10.0
 offset_top = 10.0
+offset_right = -10.0
+offset_bottom = 50.0
 
 [node name="InputField" type="LineEdit" parent="UI/TopBar"]
 unique_name_in_owner = true
 layout_mode = 2
 size_flags_horizontal = 3
-placeholder_text = "Type a command... (e.g. Add a tree)"
+placeholder_text = "Type a command... (e.g. forge me a fire sword)"
 
 [node name="StatusLabel" type="Label" parent="UI/TopBar"]
 unique_name_in_owner = true
 layout_mode = 2
 text = "Waiting for MCP..."
+
+[node name="EmotionPanel" type="PanelContainer" parent="UI"]
+unique_name_in_owner = true
+anchors_preset = 1
+anchor_left = 1.0
+anchor_right = 1.0
+offset_left = -280.0
+offset_top = 60.0
+offset_right = -10.0
+offset_bottom = 460.0
+
+[node name="VBox" type="VBoxContainer" parent="UI/EmotionPanel"]
+layout_mode = 2
+
+[node name="EmotionTitle" type="Label" parent="UI/EmotionPanel/VBox"]
+unique_name_in_owner = true
+layout_mode = 2
+text = "CHARACTER EMOTION"
+horizontal_alignment = 1
+
+[node name="Portrait" type="TextureRect" parent="UI/EmotionPanel/VBox"]
+unique_name_in_owner = true
+layout_mode = 2
+custom_minimum_size = Vector2(256, 256)
+expand_mode = 1
+stretch_mode = 5
+
+[node name="EmotionLabel" type="Label" parent="UI/EmotionPanel/VBox"]
+unique_name_in_owner = true
+layout_mode = 2
+text = "..."
+horizontal_alignment = 1
+autowrap_mode = 2
+
+[node name="EmotionDesc" type="Label" parent="UI/EmotionPanel/VBox"]
+unique_name_in_owner = true
+layout_mode = 2
+text = ""
+horizontal_alignment = 1
+autowrap_mode = 2
