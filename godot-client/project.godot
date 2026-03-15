@@ -1,0 +1,24 @@
+; Engine configuration file.
+; It's best edited using the editor UI and not directly,
+; since the parameters that go here are not all obvious.
+;
+; Format:
+;   [section] key=value
+
+config_version=5
+
+[application]
+
+config/name="Weapon Forge"
+run/main_scene="res://scenes/main.tscn"
+config/features=PackedStringArray("4.2", "Forward Plus")
+
+[autoload]
+
+GrowthLog="*res://scripts/growth_log.gd"
+McpClient="*res://scripts/mcp_client.gd"
+
+[display]
+
+window/size/viewport_width=1280
+window/size/viewport_height=720

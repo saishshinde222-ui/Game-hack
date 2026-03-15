@@ -1,0 +1,10 @@
+.env
+__pycache__/
+*.pyc
+mcp-server/assets/*.glb
+mcp-server/assets/*.mp4
+mcp-server/assets/*.png
+mcp-server/assets/*.txt
+godot-client/.godot/
+godot-client/assets/downloaded/
+.DS_Store
