@@ -29,10 +29,12 @@ position = Vector2(640.5, 680)
 shape = SubResource("RectangleShape2D_sugp2")
 
 [node name="StaticBody2D" type="StaticBody2D" parent="EntityRoot" unique_id=1536195310]
+visible = false
 position = Vector2(78, -80)
 
 [node name="Character" type="Sprite2D" parent="EntityRoot/StaticBody2D" unique_id=225031309]
-position = Vector2(644, 504)
+visible = false
+position = Vector2(644.00006, 580)
 scale = Vector2(0.31714284, 0.31714284)
 texture = ExtResource("2_sugp2")
 

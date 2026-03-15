@@ -38,7 +38,7 @@ class SeedreamClient:
             logger.warning("ARK_API_KEY not set — using placeholder")
             return GeneratedImage(path=self._write_placeholder(output_path), url="")
 
-        async with httpx.AsyncClient(timeout=60) as client:
+        async with httpx.AsyncClient(timeout=180) as client:
             resp = await client.post(
                 f"{ARK_BASE_URL}/images/generations",
                 headers={

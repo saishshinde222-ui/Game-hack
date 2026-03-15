@@ -90,7 +90,7 @@ class SeedanceClient:
         self, content: list[dict], duration: int, ratio: str
     ) -> str | None:
         try:
-            async with httpx.AsyncClient(timeout=60) as client:
+            async with httpx.AsyncClient(timeout=180) as client:
                 resp = await client.post(
                     f"{ARK_BASE_URL}/contents/generations/tasks",
                     headers={

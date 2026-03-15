@@ -10,27 +10,44 @@ from PIL import Image, ImageChops
 logger = logging.getLogger(__name__)
 
 
-async def remove_background_and_trim(image_path: Path, threshold: int = 20) -> Path:
-    """Remove white/near-white background from a sprite and autocrop to content bounds."""
+async def remove_background_and_trim(
+    image_path: Path, threshold: int = 20, trim: bool = True
+) -> Path:
+    """Remove white/near-white and checkered-pattern backgrounds, optionally autocrop.
+
+    Uses a per-channel cutoff: any pixel whose R, G, and B are all above
+    (255 - threshold*3) is treated as background.  With the default threshold
+    of 20 this means every channel must be > 195, catching both pure white
+    (255,255,255) and the light-gray squares (≈204,204,204) commonly generated
+    by video models as a fake transparency grid.
+
+    Set trim=False when processing spritesheets so the tile layout is preserved.
+    """
 
     def _process():
         img = Image.open(image_path).convert("RGBA")
+        r, g, b, a = img.split()
 
-        white = Image.new("RGBA", img.size, (255, 255, 255, 255))
-        diff = ImageChops.difference(img, white)
-        diff_gray = diff.convert("L")
+        cutoff = max(0, 255 - threshold * 3)
 
-        alpha = diff_gray.point(lambda x: 255 if x > threshold else 0)
-        img.putalpha(alpha)
+        r_bg = r.point(lambda x: 255 if x > cutoff else 0)
+        g_bg = g.point(lambda x: 255 if x > cutoff else 0)
+        b_bg = b.point(lambda x: 255 if x > cutoff else 0)
 
-        bbox = img.getbbox()
-        if bbox:
-            img = img.crop(bbox)
+        bg_mask = ImageChops.multiply(ImageChops.multiply(r_bg, g_bg), b_bg)
+        alpha_ch = bg_mask.point(lambda x: 0 if x > 128 else 255)
+
+        img.putalpha(alpha_ch)
+
+        if trim:
+            bbox = img.getbbox()
+            if bbox:
+                img = img.crop(bbox)
 
         img.save(image_path)
 
     await asyncio.to_thread(_process)
-    logger.info("Background removed and trimmed: %s", image_path.name)
+    logger.info("Background removed%s: %s", " and trimmed" if trim else "", image_path.name)
     return image_path
 
 

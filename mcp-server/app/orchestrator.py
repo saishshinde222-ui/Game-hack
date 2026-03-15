@@ -75,9 +75,16 @@ def _should_spawn(p: str) -> bool:
 
 
 def _is_animate_existing(p: str, context: dict) -> bool:
-    """Check if the user wants to animate an already-spawned entity."""
+    """Check if the user wants to animate an already-spawned entity.
+
+    Prioritises entity-reference matching: if the prompt mentions a known
+    entity AND contains an animation word, treat it as an animation request
+    even when spawn words like "make" are also present.
+    """
     if not _matches(p, ANIMATE_WORDS):
         return False
+    if _extract_target_entity(p, context) is not None:
+        return True
     if not _matches(p, SPAWN_WORDS):
         return True
     return False
@@ -183,6 +190,8 @@ async def _spawn_animated_entity(prompt: str, assets_dir: Path) -> list[dict]:
                 seed_id=seed_id,
             )
             if meta:
+                await remove_background_and_trim(meta.path, trim=False)
+
                 commands.append({
                     "type": "spawn_animated_entity",
                     "id": entity_id,
@@ -242,8 +251,11 @@ async def _animate_existing_entity(
     try:
         seedance = SeedanceClient()
         anim_prompt = (
-            "2D game character %s animation cycle, side view, smooth looping motion, "
-            "white background" % animation_name
+            "2D pixel-art game character performing a stationary %s cycle in place, "
+            "side view, character stays centered in frame, legs and arms moving but "
+            "body does not travel or drift, seamless looping animation, "
+            "solid plain white background, no checkered grid, no transparency pattern"
+            % animation_name
         )
 
         if image_url:
@@ -271,6 +283,8 @@ async def _animate_existing_entity(
                 seed_id=seed_id,
             )
             if meta:
+                await remove_background_and_trim(meta.path, trim=False)
+
                 commands.append({
                     "type": "update_animation",
                     "entity_id": entity_id,

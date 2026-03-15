@@ -1,6 +1,6 @@
 extends Node
 ## Keyboard-driven movement with gravity, jumping, and animation state switching.
-## Attaches to any Sprite2D or AnimatedSprite2D entity as a child node.
+## Supports both WASD and arrow keys. Attaches to any entity as a child node.
 
 @export var move_speed: float = 200.0
 @export var jump_velocity: float = -400.0
@@ -9,6 +9,7 @@ extends Node
 var _velocity: Vector2 = Vector2.ZERO
 var _on_ground: bool = true
 var _facing_right: bool = true
+var _jump_held_last: bool = false
 
 
 func _process(delta: float):
@@ -17,16 +18,24 @@ func _process(delta: float):
 		return
 
 	var direction: float = 0.0
-	if Input.is_action_pressed("ui_right"):
+	if Input.is_action_pressed("ui_right") or Input.is_key_pressed(KEY_D):
 		direction = 1.0
-	elif Input.is_action_pressed("ui_left"):
+	elif Input.is_action_pressed("ui_left") or Input.is_key_pressed(KEY_A):
 		direction = -1.0
 
 	_velocity.x = direction * move_speed
 
 	_velocity.y += gravity * delta
 
-	if Input.is_action_just_pressed("ui_accept") and _on_ground:
+	var jump_pressed: bool = (
+		Input.is_action_pressed("ui_accept")
+		or Input.is_key_pressed(KEY_W)
+		or Input.is_key_pressed(KEY_SPACE)
+	)
+	var jump_just_pressed: bool = jump_pressed and not _jump_held_last
+	_jump_held_last = jump_pressed
+
+	if jump_just_pressed and _on_ground:
 		_velocity.y = jump_velocity
 		_on_ground = false
 
