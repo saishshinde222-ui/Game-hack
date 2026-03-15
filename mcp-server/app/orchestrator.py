@@ -1,214 +1,280 @@
-import asyncio
 import logging
+import random
 import uuid
 from pathlib import Path
 
-from app.clients.tripo import TripoClient
 from app.clients.seedream import SeedreamClient
-from app.reasoning import analyze_seed_state
+from app.clients.seedance import SeedanceClient
+from app.utils.sprites import convert_video_to_spritesheet, remove_background_and_trim
 
 logger = logging.getLogger(__name__)
 
-WEAPON_WORDS = [
-    "sword", "blade", "axe", "hammer", "dagger", "spear", "staff", "bow",
-    "shield", "mace", "weapon", "knife", "katana", "scythe", "wand",
+SPAWN_WORDS = ["add", "spawn", "create", "place", "make", "generate", "build", "forge", "craft"]
+REMOVE_WORDS = ["remove", "delete", "destroy"]
+BEHAVIOR_WORDS = ["wander", "move to", "move_to"]
+ANIMATE_WORDS = ["animate", "walk", "run", "idle", "attack", "dance", "jump"]
+
+DEFAULT_GROUND_Y = 597.0
+VIEWPORT_WIDTH = 1280
+SPAWN_X_MIN = 100
+SPAWN_X_MAX = 1180
+
+DESIRED_HEIGHT_CHARACTER = 200
+DESIRED_HEIGHT_OBJECT = 180
+DESIRED_HEIGHT_ITEM = 80
+
+ANIMATED_ENTITY_WORDS = [
+    "character", "hero", "player", "warrior", "creature", "monster",
+    "npc", "person", "knight", "wizard", "mage", "goblin", "skeleton",
+    "slime", "dragon", "cat", "dog", "bird", "fish", "villager",
 ]
 
-FORGE_WORDS = ["forge", "generate", "make", "create", "craft", "build"]
-
-OBJECT_3D_WORDS = [
+STATIC_OBJECT_WORDS = [
     "tree", "rock", "house", "castle", "chair", "table", "chest",
     "barrel", "lamp", "statue", "pillar", "fountain", "bridge",
     "tower", "gate", "wall", "fence", "bench", "torch", "throne",
+    "flower", "bush", "crate", "sign", "door", "window", "path",
+]
+
+ITEM_WORDS = [
+    "sword", "blade", "axe", "hammer", "dagger", "spear", "staff", "bow",
+    "shield", "mace", "weapon", "knife", "katana", "scythe", "wand",
+    "potion", "gem", "coin", "key", "ring", "amulet", "scroll", "book",
 ]
 
 
 async def handle_user_prompt(prompt: str, context: dict, assets_dir: Path) -> list[dict]:
-    prompt_lower = prompt.lower().strip()
+    p = prompt.lower().strip()
 
-    if _is_remove_request(prompt_lower):
+    if _matches(p, REMOVE_WORDS):
         return _remove_entity(prompt)
 
-    if _is_behavior_request(prompt_lower):
+    if _is_animate_existing(p, context):
+        return await _animate_existing_entity(prompt, p, context, assets_dir)
+
+    if _matches(p, BEHAVIOR_WORDS):
         return _attach_behavior(prompt)
 
-    if _has_weapon_word(prompt_lower):
-        return await _forge_weapon_with_emotion(prompt, assets_dir)
-
-    if _needs_3d_generation(prompt_lower):
-        return await _generate_3d_object(prompt, assets_dir)
-
-    if _is_spawn_request(prompt_lower):
-        return await _generate_3d_object(prompt, assets_dir)
+    if _should_spawn(p):
+        if _matches(p, ANIMATED_ENTITY_WORDS):
+            return await _spawn_animated_entity(prompt, assets_dir)
+        return await _spawn_static_entity(prompt, assets_dir)
 
     return [{"type": "status", "message": "Command not recognized: %s" % prompt}]
 
 
-def _has_weapon_word(p: str) -> bool:
-    return any(w in p for w in WEAPON_WORDS)
+def _matches(p: str, words: list[str]) -> bool:
+    return any(w in p for w in words)
 
 
-def _needs_3d_generation(p: str) -> bool:
-    has_object = any(w in p for w in OBJECT_3D_WORDS)
-    has_action = any(w in p for w in FORGE_WORDS + ["add", "spawn", "place"])
-    return has_object and has_action
+def _should_spawn(p: str) -> bool:
+    return _matches(p, SPAWN_WORDS)
 
 
-def _is_spawn_request(p: str) -> bool:
-    return any(w in p for w in ["add", "spawn", "create", "place", "make", "generate", "build"])
+def _is_animate_existing(p: str, context: dict) -> bool:
+    """Check if the user wants to animate an already-spawned entity."""
+    if not _matches(p, ANIMATE_WORDS):
+        return False
+    if not _matches(p, SPAWN_WORDS):
+        return True
+    return False
 
 
-def _is_remove_request(p: str) -> bool:
-    return any(w in p for w in ["remove", "delete", "destroy"])
+def _extract_entity_name(prompt: str) -> str:
+    words = prompt.lower().split()
+    skip = set(SPAWN_WORDS + REMOVE_WORDS + ["a", "an", "the", "me", "for", "with", "that"])
+    words = [w for w in words if w not in skip]
+    return "_".join(words[:3]) if words else "entity"
 
 
-def _is_behavior_request(p: str) -> bool:
-    return any(w in p for w in ["wander", "move to", "chop", "equip"])
+def _extract_target_entity(prompt: str, context: dict) -> str | None:
+    """Try to find an entity ID referenced in the prompt from the current entity list."""
+    entities = context.get("entities", [])
+    p = prompt.lower()
+    for ent in entities:
+        eid = ent if isinstance(ent, str) else ent.get("id", "")
+        if eid and eid.lower() in p:
+            return eid
+    return None
 
 
-async def _forge_weapon_with_emotion(prompt: str, assets_dir: Path) -> list[dict]:
-    """Full pipeline: Reasoning → parallel Tripo (weapon) + Seedream (face emotion) → spawn + portrait."""
+# ---------------------------------------------------------------------------
+# Static sprite spawn (Seedream only)
+# ---------------------------------------------------------------------------
+
+async def _spawn_static_entity(prompt: str, assets_dir: Path) -> list[dict]:
     seed_id = str(uuid.uuid4())[:8]
-    growth_log = _extract_growth_log(prompt)
-    prompts = analyze_seed_state(growth_log)
+    entity_id = _extract_entity_name(prompt) + "_%s" % seed_id
+    is_item = _matches(prompt.lower(), ITEM_WORDS)
+    sprite_prompt = _build_sprite_prompt(prompt, is_item=is_item)
 
-    commands = []
-
-    # --- Parallel: Tripo weapon + Seedream emotion face ---
-    commands.append({
-        "type": "status",
-        "message": "Forging weapon + generating emotion... (%s)" % prompts["emotion"].upper(),
-    })
-
-    tripo_task = _run_tripo(prompts["tripo_prompt"], assets_dir, seed_id)
-    face_task = _run_seedream_face(prompts["face_prompt"], assets_dir, seed_id)
-
-    results = await asyncio.gather(tripo_task, face_task, return_exceptions=True)
-
-    glb_path, thumb_path = (None, None)
-    face_path = None
-
-    if not isinstance(results[0], Exception):
-        glb_path, thumb_path = results[0]
-    else:
-        logger.error("Tripo failed: %s", results[0])
-        commands.append({"type": "status", "message": "Weapon generation failed: %s" % results[0]})
-
-    if not isinstance(results[1], Exception):
-        face_path = results[1]
-    else:
-        logger.error("Face generation failed: %s", results[1])
-
-    # --- Send portrait update ---
-    if face_path and face_path.exists():
-        commands.append({
-            "type": "update_portrait",
-            "image_url": "/assets/%s_face.png" % seed_id,
-            "emotion": prompts["emotion"],
-            "description": prompts["emotion_description"],
-        })
-
-    # --- Spawn weapon ---
-    if glb_path and glb_path.exists():
-        entity_id = "weapon_%s" % seed_id
-        commands.append({
-            "type": "spawn_entity",
-            "id": entity_id,
-            "model_path": str(glb_path),
-            "position": {"x": 0, "y": 1, "z": -2},
-            "rotation": {"x": 0, "y": 0, "z": 0},
-            "scale": {"x": 1, "y": 1, "z": 1},
-            "scripts": ["equippable"],
-        })
-        commands.append({
-            "type": "status",
-            "message": "Weapon forged! Emotion: %s" % prompts["emotion"].upper(),
-        })
-    elif not any(isinstance(r, Exception) for r in results[:1]):
-        commands.append({"type": "status", "message": "Forge complete but no model generated"})
-
-    return commands
-
-
-async def _run_tripo(prompt: str, assets_dir: Path, seed_id: str):
-    tripo = TripoClient()
-    return await tripo.generate(prompt=prompt, output_dir=assets_dir, seed_id=seed_id)
-
-
-async def _run_seedream_face(face_prompt: str, assets_dir: Path, seed_id: str):
-    seedream = SeedreamClient()
-    return await seedream.generate_face(
-        prompt=face_prompt, output_dir=assets_dir, seed_id=seed_id
-    )
-
-
-async def _generate_3d_object(prompt: str, assets_dir: Path) -> list[dict]:
-    """Generate a generic 3D object via Tripo."""
-    seed_id = str(uuid.uuid4())[:8]
-    tripo_prompt = _build_object_prompt(prompt)
-
-    commands = []
-    commands.append({"type": "status", "message": "Generating 3D: %s" % tripo_prompt[:80]})
+    commands: list[dict] = []
+    commands.append({"type": "status", "message": "Generating sprite: %s" % sprite_prompt[:80]})
 
     try:
-        glb_path, _ = await _run_tripo(tripo_prompt, assets_dir, seed_id)
-        entity_id = _extract_entity_name(prompt) + "_%s" % seed_id
+        seedream = SeedreamClient()
+        result = await seedream.generate(sprite_prompt, assets_dir, seed_id)
+
+        await remove_background_and_trim(result.path)
+
+        desired_h = DESIRED_HEIGHT_ITEM if is_item else DESIRED_HEIGHT_OBJECT
+        spawn_x = random.randint(SPAWN_X_MIN, SPAWN_X_MAX)
 
         commands.append({
             "type": "spawn_entity",
             "id": entity_id,
-            "model_path": str(glb_path) if glb_path else "",
-            "position": {"x": 0, "y": 1, "z": -2},
-            "scale": {"x": 1, "y": 1, "z": 1},
-            "scripts": [],
+            "texture_path": str(result.path),
+            "position": {"x": spawn_x, "y": 0},
+            "desired_height": desired_h,
         })
-        commands.append({"type": "status", "message": "Done! Spawned: %s" % entity_id})
+        commands.append({"type": "status", "message": "Spawned: %s" % entity_id})
 
     except Exception as e:
-        logger.exception("3D generation failed")
+        logger.exception("Static sprite generation failed")
         commands.append({"type": "status", "message": "Generation failed: %s" % str(e)})
 
     return commands
 
 
-def _build_object_prompt(prompt: str) -> str:
-    clean = prompt.strip()
-    for skip in ["add", "spawn", "create", "place", "make", "generate", "build", "a", "an", "the"]:
-        clean = clean.replace(skip, "", 1).strip()
-    return "3D game asset: %s, stylized, PBR textures, detailed, game-ready" % clean
+# ---------------------------------------------------------------------------
+# Animated sprite spawn (Seedream → Seedance → spritesheet)
+# ---------------------------------------------------------------------------
+
+async def _spawn_animated_entity(prompt: str, assets_dir: Path) -> list[dict]:
+    seed_id = str(uuid.uuid4())[:8]
+    entity_id = _extract_entity_name(prompt) + "_%s" % seed_id
+
+    commands: list[dict] = []
+    commands.append({"type": "status", "message": "Generating animated sprite..."})
+
+    spawn_x = random.randint(SPAWN_X_MIN, SPAWN_X_MAX)
+
+    try:
+        seedream = SeedreamClient()
+        ref_prompt = _build_character_prompt(prompt)
+        ref_result = await seedream.generate(ref_prompt, assets_dir, seed_id)
+
+        await remove_background_and_trim(ref_result.path)
+
+        commands.append({"type": "status", "message": "Reference sprite ready, generating animation..."})
+
+        seedance = SeedanceClient()
+        anim_prompt = _build_animation_prompt(prompt)
+        video_path = await seedance.image_to_video(
+            image_url=ref_result.url,
+            prompt=anim_prompt,
+            output_dir=assets_dir,
+            seed_id=seed_id,
+        )
+
+        if video_path and video_path.exists():
+            meta = await convert_video_to_spritesheet(
+                video_path=video_path,
+                output_dir=assets_dir,
+                seed_id=seed_id,
+            )
+            if meta:
+                commands.append({
+                    "type": "spawn_animated_entity",
+                    "id": entity_id,
+                    "spritesheet_path": str(meta.path),
+                    "frame_count": meta.frame_count,
+                    "columns": meta.columns,
+                    "fps": 8,
+                    "position": {"x": spawn_x, "y": 0},
+                    "desired_height": DESIRED_HEIGHT_CHARACTER,
+                })
+                commands.append({"type": "status", "message": "Spawned animated: %s" % entity_id})
+                return commands
+
+        commands.append({"type": "status", "message": "Animation failed, spawning static sprite"})
+        commands.append({
+            "type": "spawn_entity",
+            "id": entity_id,
+            "texture_path": str(ref_result.path),
+            "position": {"x": spawn_x, "y": 0},
+            "desired_height": DESIRED_HEIGHT_CHARACTER,
+        })
+        commands.append({"type": "status", "message": "Spawned (static fallback): %s" % entity_id})
+
+    except Exception as e:
+        logger.exception("Animated sprite generation failed")
+        commands.append({"type": "status", "message": "Generation failed: %s" % str(e)})
+
+    return commands
 
 
-def _extract_entity_name(prompt: str) -> str:
-    words = prompt.lower().split()
-    for skip in ["add", "spawn", "create", "place", "make", "generate", "build",
-                  "forge", "craft", "a", "an", "the", "me", "for", "with"]:
-        words = [w for w in words if w != skip]
-    return "_".join(words[:3]) if words else "entity"
+# ---------------------------------------------------------------------------
+# Animate an existing entity (Seedance → spritesheet → update_animation)
+# ---------------------------------------------------------------------------
 
+async def _animate_existing_entity(
+    prompt: str, p: str, context: dict, assets_dir: Path
+) -> list[dict]:
+    seed_id = str(uuid.uuid4())[:8]
+    entity_id = _extract_target_entity(prompt, context)
 
-def _extract_growth_log(prompt: str) -> dict:
-    p = prompt.lower()
-    style = "balanced"
-    for s in ["fire", "ice", "lightning", "shadow", "holy"]:
-        if s in p:
-            style = "fire-heavy" if s == "fire" else s
+    if not entity_id:
+        return [{"type": "status", "message": "Which entity? Specify a name. Known: %s" %
+                 ", ".join(_get_entity_ids(context))}]
+
+    commands: list[dict] = []
+
+    animation_name = "idle"
+    for anim in ["walk", "run", "attack", "dance", "jump", "idle"]:
+        if anim in p:
+            animation_name = anim
             break
 
-    anger = 5 if any(w in p for w in ["angry", "rage", "vengeful", "fury"]) else 1
-    damage = 2000 if any(w in p for w in ["powerful", "strong", "deadly"]) else 800
+    commands.append({"type": "status", "message": "Generating %s animation for %s..." % (animation_name, entity_id)})
 
-    return {
-        "combatStyle": style,
-        "timeInSun": 0,
-        "angerEvents": anger,
-        "damageDealt": damage,
-    }
+    try:
+        seedance = SeedanceClient()
+        anim_prompt = "2D game character %s animation cycle, side view, smooth motion, clean background" % animation_name
 
+        video_path = await seedance.text_to_video(
+            prompt=anim_prompt,
+            output_dir=assets_dir,
+            seed_id=seed_id,
+            ratio="1:1",
+        )
+
+        if video_path and video_path.exists():
+            meta = await convert_video_to_spritesheet(
+                video_path=video_path,
+                output_dir=assets_dir,
+                seed_id=seed_id,
+            )
+            if meta:
+                commands.append({
+                    "type": "update_animation",
+                    "entity_id": entity_id,
+                    "animation_name": animation_name,
+                    "spritesheet_path": str(meta.path),
+                    "frame_count": meta.frame_count,
+                    "columns": meta.columns,
+                    "fps": 8,
+                })
+                commands.append({"type": "status", "message": "Animation '%s' applied to %s" % (animation_name, entity_id)})
+                return commands
+
+        commands.append({"type": "status", "message": "Animation generation failed for %s" % entity_id})
+
+    except Exception as e:
+        logger.exception("Animation generation failed")
+        commands.append({"type": "status", "message": "Animation failed: %s" % str(e)})
+
+    return commands
+
+
+# ---------------------------------------------------------------------------
+# Behavior / remove (unchanged logic, 2D positions)
+# ---------------------------------------------------------------------------
 
 def _remove_entity(prompt: str) -> list[dict]:
     words = prompt.lower().split()
-    for skip in ["remove", "delete", "destroy", "the", "a", "an"]:
-        words = [w for w in words if w != skip]
+    skip = set(REMOVE_WORDS + ["the", "a", "an"])
+    words = [w for w in words if w not in skip]
     if not words:
         return [{"type": "status", "message": "Remove what?"}]
     return [{"type": "remove_entity", "id": "_".join(words)}]
@@ -217,15 +283,56 @@ def _remove_entity(prompt: str) -> list[dict]:
 def _attach_behavior(prompt: str) -> list[dict]:
     p = prompt.lower()
     behavior = None
-    for b in ["wander", "move_to", "choppable", "equippable"]:
+    for b in ["wander", "move_to"]:
         if b.replace("_", " ") in p or b in p:
             behavior = b
             break
     if behavior is None:
         return [{"type": "status", "message": "Unknown behavior: %s" % prompt}]
+
+    entity_hint = _extract_entity_name(prompt)
     return [{
         "type": "attach_behavior",
-        "entity_id": "",
+        "entity_id": entity_hint,
         "behavior": behavior,
         "params": {},
-    }, {"type": "status", "message": "Specify entity_id for '%s'" % behavior}]
+    }, {"type": "status", "message": "Attached '%s' to '%s'" % (behavior, entity_hint)}]
+
+
+# ---------------------------------------------------------------------------
+# Prompt builders
+# ---------------------------------------------------------------------------
+
+def _build_sprite_prompt(prompt: str, is_item: bool = False) -> str:
+    clean = prompt.strip()
+    for skip in SPAWN_WORDS + ["a", "an", "the"]:
+        clean = clean.replace(skip, "", 1).strip()
+
+    if is_item:
+        return "2D game item icon, %s, centered, clean transparent background, detailed, stylized" % clean
+    return "2D game sprite, %s, side view, clean transparent background, detailed, stylized" % clean
+
+
+def _build_character_prompt(prompt: str) -> str:
+    clean = prompt.strip()
+    for skip in SPAWN_WORDS + ["a", "an", "the"]:
+        clean = clean.replace(skip, "", 1).strip()
+    return (
+        "2D game character sprite, %s, side view, full body, "
+        "clean transparent background, colorful, stylized" % clean
+    )
+
+
+def _build_animation_prompt(prompt: str) -> str:
+    clean = prompt.strip()
+    for skip in SPAWN_WORDS + ["a", "an", "the"]:
+        clean = clean.replace(skip, "", 1).strip()
+    return "2D game character idle breathing animation, %s, side view, smooth motion, clean background" % clean
+
+
+def _get_entity_ids(context: dict) -> list[str]:
+    entities = context.get("entities", [])
+    return [
+        (ent if isinstance(ent, str) else ent.get("id", ""))
+        for ent in entities
+    ]

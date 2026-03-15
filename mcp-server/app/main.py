@@ -11,13 +11,12 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
 from app.orchestrator import handle_user_prompt
-from app.state import forge_store
 
 load_dotenv()
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-app = FastAPI(title="MCP Weapon Forge")
+app = FastAPI(title="MCP 2D Demo")
 
 app.add_middleware(
     CORSMiddleware,
@@ -83,7 +82,6 @@ async def _handle_godot_message(ws, raw: str):
 
     elif msg_type == "context":
         logger.info("Received project context from Godot")
-        forge_store["last_context"] = data.get("data", {})
 
 
 async def send_to_godot(payload: dict):
